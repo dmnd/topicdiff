@@ -33,7 +33,6 @@ class DiffContext(object):
             assert get_id(old) == get_id(new), "ids don't match: %r, %r" % (
                 get_id(new), get_id(old))
 
-
         children_old = old.get('children', []) if old else []
         children_new = new.get('children', []) if new else []
 
@@ -65,12 +64,12 @@ class DiffContext(object):
         }
 
         colour = None
-        if curated:
-            colour = colours['blue']
-        elif sdchildren == '   d':
+        if sdchildren == '   d':
             colour = colours['red']
         elif sdchildren == '   a':
-            color = colours['green']
+            colour = colours['green']
+        elif curated:
+            colour = colours['blue']
         elif dchildren < 0:
             colour = colours['red']
         elif dchildren > 0:
