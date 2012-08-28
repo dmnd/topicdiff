@@ -68,9 +68,28 @@ class DiffContext(object):
             old = self.root_old
             new = self.root_new
 
-        if new and old:
+        self_changed = old is None or new is None
+
+        self_added = False
+        self_removed = False
+        self_moved = False
+        if old is None:
+            self_added = True
+        elif new is None:
+            self_removed = True
+        elif new and old:
             assert get_id(old) == get_id(new), "ids don't match: %r, %r" % (
                 get_id(new), get_id(old))
+
+            # check if node has been moved
+            paths_old = set(self.index_old[get_id(old)])
+            paths_new = set(self.index_new[get_id(new)])
+
+            strictly_new_paths = paths_new - paths_old
+            strictly_old_paths = paths_old - paths_new
+            if strictly_new_paths or strictly_old_paths:
+                self_changed = True
+                self_moved = True
 
         cold = old.get('children', []) if old else []
         cnew = new.get('children', []) if new else []
@@ -81,8 +100,6 @@ class DiffContext(object):
         cnew_set = set()
         if new:
             cnew_set = set(get_id(c) for c in new.get('children', []))
-
-        self_changed = cold != cnew
 
         added = cnew_set - cold_set
         removed = cold_set - cnew_set
@@ -96,8 +113,8 @@ class DiffContext(object):
             sdchildren = "%s %s" % (added_str, removed_str)
 
         # check if order of children changed
-        reordered = any(cold != cnew
-                        for cold, cnew in zip(cold_set, cnew_set))
+        reordered = (not added and not removed and
+                     any(o != n for o, n in zip(cold, cnew)))
 
         # check if the topic has become curated
         def has_separator(children):
@@ -105,7 +122,11 @@ class DiffContext(object):
         curated = has_separator(cnew_set)
 
         colour = None
-        if curated:
+        if self_added:
+            colour = colours['green']
+        elif self_removed:
+            colour = colours['red']
+        elif curated:
             colour = colours['blue']
         elif reordered:
             colour = colours['yellow']
@@ -115,13 +136,24 @@ class DiffContext(object):
             tags.add('reordered')
         if curated:
             tags.add('curated')
+        if self_moved:
+            for path in strictly_new_paths:
+                tags.add('copied to %s' % path)
+            for path in strictly_old_paths:
+                tags.add('removed from %s' % path)
 
         id = get_id(old) if old else get_id(new)
-        pindent("%(dchildren)s %(id)s (%(oc)i -> %(nc)i) %(tags)s" % {
+        if cold_set or cnew_set:
+            children_count = "(%(oc)i -> %(nc)i) " % {
+                'oc': len(cold_set),
+                'nc': len(cnew_set),
+            }
+        else:
+            children_count = ""
+        pindent("%(dchildren)s %(id)s %(children_count)s %(tags)s" % {
             'dchildren': sdchildren,
             'id': id[1],
-            'oc': len(cold_set),
-            'nc': len(cnew_set),
+            'children_count': children_count,
             'tags': ", ".join(tags)}, indent, colour, buffer=topic_buffer)
 
         def recurse(children, other_children, other_index, root, fn, done):
@@ -135,7 +167,7 @@ class DiffContext(object):
             """
             changed = False
             for child in children:
-                if child['kind'] == "Topic":
+                if child['kind'] in args.kinds:
                     id = get_id(child)
                     if id in children_done:
                         continue
@@ -160,7 +192,7 @@ class DiffContext(object):
 
         # if there are still new ids after subtracting the done ones, print
         # a separator
-        new_ids = {get_id(c) for c in cnew if c['kind'] == 'Topic'}
+        new_ids = {get_id(c) for c in cnew if c['kind'] in args.kinds}
         if (new_ids - children_done):
             children_changed = True
             pindent('.' * 9, indent + 4, buffer=topic_buffer)
@@ -268,7 +300,7 @@ def pindent(s="", n=0, colour=None, indent=True, buffer=None):
 
 def get_id(entity):
     if entity["kind"] == "Separator":
-        return ("Separator", "Separator")
+        return ("Separator", "_separator")
     else:
         return (entity["kind"], entity[ids[entity['kind']]])
 
@@ -297,8 +329,15 @@ class Path(CommonEqualityMixin):
         self.parts = parts
 
     def __repr__(self):
-        return ("/" + "/".join(p[1] for p in self.parts[1:-1]) +
-                "/" + Path.str_key(self.parts[-1]))
+        # don't show root
+        path = [p[1] for p in self.parts[:-1]]
+        if path:
+            path[0] = ""
+        path.append(Path.str_key(self.parts[-1]))
+        return "/".join(path)
+
+    def __hash__(self):
+        return reduce(lambda s, p: s ^ hash(p), self.parts, 0)
 
     def get(self, root):
         assert get_id(root) == self.parts[0]
@@ -348,7 +387,7 @@ def parse_args():
                       help='Indent output')
     parser.add_argument('--no-collapse', action='store_true', default=False,
                       help='Only show nodes that have changed')
-    parser.add_argument('--kinds', nargs='*', default=['Exercise'])
+    parser.add_argument('--kinds', nargs='*', default=['Topic'])
     parser.add_argument('--root', default='root', help='Restrict report to '
         'element with this id')
     parser.add_argument('old', help='old topictree.json')
