@@ -62,7 +62,7 @@ class DiffContext(object):
 
         return data
 
-    def topic_report(self, buffer, old=None, new=None, indent=0):
+    def topic_report(self, buffer, old=None, new=None, indent=0, moved=False):
         # if nothing supplied, assume comparing 2 root elements
         if not new and not old:
             old = self.index_old[get_id(self.root_old)][0]
@@ -98,29 +98,25 @@ class DiffContext(object):
         else:
             sdchildren = "%s %s" % (added_str, removed_str)
 
-        # check if order of children changed
-        reordered = (not added and not removed and
-                     any(o != n for o, n in zip(cold, cnew)))
-
         # check if the topic has become curated
         def has_separator(children):
             return any(c[0] == 'Separator' for c in children)
         curated = has_separator(cnew_set) and not has_separator(cold_set)
 
+        tags = set()
         colour = None
-        if self_added:
+        if moved:
+            if self_added:
+                colour = colours['yellow']
+            else:
+                colour = colours['red']
+                tags.add('repos')
+        elif self_added:
             colour = colours['green']
         elif self_removed:
             colour = colours['red']
         elif curated:
             colour = colours['blue']
-        elif reordered:
-            colour = colours['yellow']
-
-        tags = set()
-        if reordered:
-            tags.add('reordered')
-        if curated:
             tags.add('newly curated')
 
         id = old.id() if old else new.id()
@@ -159,30 +155,33 @@ class DiffContext(object):
                         child_changed = fn(make_path(path, child_a),
                                            make_path(path, child_b))
                         changed = changed or child_changed
-                elif op == 'delete':
+                else:  # op is replace, insert or delete
+                    # handle deletions
                     for ai in xrange(al, ah):
                         child_a = sm.a[ai]
-                        child_changed = fn(make_path(path, child_a), None)
+
+                        # the child was moved somewhere else in the topic
+                        moved = child_a in sm.b
+                        child_changed = fn(make_path(path, child_a), None,
+                            moved=moved)
                         changed = changed or child_changed
-                elif op == 'insert':
+
+                    # now handle insertions
                     for bi in xrange(bl, bh):
                         child_b = sm.b[bi]
-                        child_changed = fn(None, make_path(path, child_b))
-                        changed = changed or child_changed
-                elif op == 'replace':
-                    for ai in xrange(al, ah):
-                        child_a = sm.a[ai]
-                        child_changed = fn(make_path(path, child_a), None)
-                        changed = changed or child_changed
-                    for bi in xrange(bl, bh):
-                        child_b = sm.b[bi]
-                        child_changed = fn(None, make_path(path, child_b))
+
+                        # check to see if the child came from somewhere else in
+                        # the topic.
+                        moved = child_b in sm.a
+                        child_changed = fn(None, make_path(path, child_b),
+                            moved=moved)
                         changed = changed or child_changed
             return changed
 
         # recurse for all children
         children_changed = recurse(old or new, cold, cnew,
-            lambda c, oc: self.topic_report(topic_buffer, c, oc, indent + 4))
+            lambda c, oc, moved=False: self.topic_report(
+                topic_buffer, c, oc, indent + 4, moved=moved))
 
         # if args.no_collapse or self_changed or children_changed:
         buffer.write(topic_buffer.getvalue())
