@@ -3,6 +3,7 @@ import json
 import argparse
 import clean
 import StringIO
+import difflib
 
 ids = {
     "Topic": "id",
@@ -62,11 +63,10 @@ class DiffContext(object):
         return data
 
     def topic_report(self, buffer, old=None, new=None, indent=0):
-        topic_buffer = StringIO.StringIO()
-
+        # if nothing supplied, assume comparing 2 root elements
         if not new and not old:
-            old = self.root_old
-            new = self.root_new
+            old = self.index_old[get_id(self.root_old)][0]
+            new = self.index_new[get_id(self.root_new)][0]
 
         self_changed = old is None or new is None
 
@@ -78,28 +78,14 @@ class DiffContext(object):
         elif new is None:
             self_removed = True
         elif new and old:
-            assert get_id(old) == get_id(new), "ids don't match: %r, %r" % (
-                get_id(new), get_id(old))
+            assert old.id() == new.id(), "ids don't match: %r, %r" % (
+                new.id(), old.id())
 
-            # check if node has been moved
-            paths_old = set(self.index_old[get_id(old)])
-            paths_new = set(self.index_new[get_id(new)])
+        cold = old.get(self.root_old).get('children', []) if old else []
+        cnew = new.get(self.root_new).get('children', []) if new else []
 
-            strictly_new_paths = paths_new - paths_old
-            strictly_old_paths = paths_old - paths_new
-            if strictly_new_paths or strictly_old_paths:
-                self_changed = True
-                self_moved = True
-
-        cold = old.get('children', []) if old else []
-        cnew = new.get('children', []) if new else []
-
-        cold_set = set()
-        if old:
-            cold_set = set(get_id(c) for c in old.get('children', []))
-        cnew_set = set()
-        if new:
-            cnew_set = set(get_id(c) for c in new.get('children', []))
+        cold_set = set(get_id(c) for c in cold)
+        cnew_set = set(get_id(c) for c in cnew)
 
         added = cnew_set - cold_set
         removed = cold_set - cnew_set
@@ -119,7 +105,7 @@ class DiffContext(object):
         # check if the topic has become curated
         def has_separator(children):
             return any(c[0] == 'Separator' for c in children)
-        curated = has_separator(cnew_set)
+        curated = has_separator(cnew_set) and not has_separator(cold_set)
 
         colour = None
         if self_added:
@@ -135,14 +121,9 @@ class DiffContext(object):
         if reordered:
             tags.add('reordered')
         if curated:
-            tags.add('curated')
-        if self_moved:
-            for path in strictly_new_paths:
-                tags.add('copied to %s' % path)
-            for path in strictly_old_paths:
-                tags.add('removed from %s' % path)
+            tags.add('newly curated')
 
-        id = get_id(old) if old else get_id(new)
+        id = old.id() if old else new.id()
         if cold_set or cnew_set:
             children_count = "(%(oc)i -> %(nc)i) " % {
                 'oc': len(cold_set),
@@ -150,13 +131,22 @@ class DiffContext(object):
             }
         else:
             children_count = ""
+
+        # buffer to write to so we can throw away output later
+        topic_buffer = StringIO.StringIO()
+
         pindent("%(dchildren)s %(id)s %(children_count)s %(tags)s" % {
             'dchildren': sdchildren,
-            'id': id[1],
+            'id': Path.str_key(id),
             'children_count': children_count,
             'tags': ", ".join(tags)}, indent, colour, buffer=topic_buffer)
 
-        def recurse(children, other_children, other_index, root, fn, done):
+        def make_path(parent_path, id):
+            path = parent_path.copy()
+            path.parts.append(id)
+            return path
+
+        def recurse(path, children, other_children, fn):
             """For each child in children, recurse for all that are topics.
             Contains logic to find the location of the corresponding new child
             in the new tree.
@@ -166,48 +156,45 @@ class DiffContext(object):
             swapped.
             """
             changed = False
-            for child in children:
-                if child['kind'] in args.kinds:
-                    id = get_id(child)
-                    if id in children_done:
-                        continue
-                    children_done.add(id)
-
-                    # find the new location
-                    other_child = None
-                    if id in other_index:
-                        other_child_path = other_index[id]
-                        other_child = other_child_path[0].get(root)
-
-                    children_done.add(id)
-                    child_changed = fn(child, other_child)
-                    changed = changed or child_changed
+            sm = difflib.SequenceMatcher(
+                a=[get_id(c) for c in children],
+                b=[get_id(c) for c in other_children])
+            for op, al, ah, bl, bh in sm.get_opcodes():
+                if op == 'equal':
+                    for ai, bi in zip(xrange(al, ah), xrange(bl, bh)):
+                        child_a = sm.a[ai]
+                        child_b = sm.b[bi]
+                        child_changed = fn(make_path(path, child_a),
+                                           make_path(path, child_b))
+                        changed = changed or child_changed
+                elif op == 'delete':
+                    for ai in xrange(al, ah):
+                        child_a = sm.a[ai]
+                        child_changed = fn(make_path(path, child_a), None)
+                        changed = changed or child_changed
+                elif op == 'insert':
+                    for bi in xrange(bl, bh):
+                        child_b = sm.b[bi]
+                        child_changed = fn(None, make_path(path, child_b))
+                        changed = changed or child_changed
+                elif op == 'replace':
+                    for ai in xrange(al, ah):
+                        child_a = sm.a[ai]
+                        child_changed = fn(make_path(path, child_a), None)
+                        changed = changed or child_changed
+                    for bi in xrange(bl, bh):
+                        child_b = sm.b[bi]
+                        child_changed = fn(None, make_path(path, child_b))
+                        changed = changed or child_changed
             return changed
 
-        children_done = set()
-        # recurse for all old children that were deleted or changed
-        children_changed = recurse(cold, cnew, self.index_new, self.root_new,
-            lambda c, oc: self.topic_report(topic_buffer, c, oc, indent + 4),
-            children_done)
+        # recurse for all children
+        children_changed = recurse(old or new, cold, cnew,
+            lambda c, oc: self.topic_report(topic_buffer, c, oc, indent + 4))
 
-        # if there are still new ids after subtracting the done ones, print
-        # a separator
-        new_ids = {get_id(c) for c in cnew if c['kind'] in args.kinds}
-        if (new_ids - children_done):
-            children_changed = True
-            pindent('.' * 9, indent + 4, buffer=topic_buffer)
-
-            # now recurse for all children that are brand new in the new tree
-            recurse(cnew, cold, self.root_old, self.root_old,
-                lambda c, oc: self.topic_report(
-                    topic_buffer, oc, c, indent + 4),
-                children_done)
-
-        if self_changed or children_changed or args.no_collapse:
-            buffer.write(topic_buffer.getvalue())
-            return True
-        else:
-            return False
+        # if args.no_collapse or self_changed or children_changed:
+        buffer.write(topic_buffer.getvalue())
+        return self_changed or children_changed
 
     def entity_report(self, kind="Exercise"):
         print
@@ -323,24 +310,22 @@ class CommonEqualityMixin(object):
 
 
 class Path(CommonEqualityMixin):
-    parts = []
-
     def __init__(self, parts):
         self.parts = parts
 
     def __repr__(self):
         # don't show root
-        path = [p[1] for p in self.parts[:-1]]
+        path = [Path.str_key(p) for p in self.parts[:-1]]
         if path:
             path[0] = ""
-        path.append(Path.str_key(self.parts[-1]))
+        path.append(Path.str_key(self.id()))
         return "/".join(path)
 
     def __hash__(self):
         return reduce(lambda s, p: s ^ hash(p), self.parts, 0)
 
     def get(self, root):
-        assert get_id(root) == self.parts[0]
+        assert get_id(root) == self.root()
 
         for key in self.parts[1:]:
             next = None
@@ -362,6 +347,12 @@ class Path(CommonEqualityMixin):
             return key[1]
         else:
             return key[0][0].lower() + '/' + key[1]
+
+    def id(self):
+        return self.parts[-1]
+
+    def root(self):
+        return self.parts[0]
 
 
 def index_topic(topic, path=None, index=None):
