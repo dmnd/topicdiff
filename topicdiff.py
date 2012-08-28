@@ -147,14 +147,6 @@ class DiffContext(object):
             return path
 
         def recurse(path, children, other_children, fn):
-            """For each child in children, recurse for all that are topics.
-            Contains logic to find the location of the corresponding new child
-            in the new tree.
-
-            Note that this will NOT recurse for any items not inside the
-            children list. For that, run again with children and other_children
-            swapped.
-            """
             changed = False
             sm = difflib.SequenceMatcher(
                 a=[get_id(c) for c in children],
