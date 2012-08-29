@@ -15,11 +15,20 @@ ids = {
 }
 
 colours = {
-    'red': 31,
-    'green': 32,
-    'yellow': 33,
-    'blue': 34,
+    'red': '0;31',
+    'green': '0;32',
+    'yellow': '0;33',
+    'blue': '0;34',
+    'light grey': '0;37',
+    'dark red': '1;31'
 }
+
+
+def str_colour(s, colour=None):
+    if colour and not args.no_colour:
+        return '\033[%sm%s\033[0m' % (colour, s)
+    else:
+        return s
 
 
 def find_element(tree, predicate):
@@ -69,14 +78,56 @@ class DiffContext(object):
             new = self.index_new[get_id(self.root_new)][0]
 
         self_changed = old is None or new is None
+        id = old.id() if old else new.id()
+        tags = set()
 
         self_added = False
         self_removed = False
         self_moved = False
+
+        def _get_source(
+            path, index_current, index_other, new_str, move_colour):
+            """try to find where it came from"""
+            other_paths = set(index_other.get(path.id(), []))
+
+            if not other_paths:
+                return [new_str]
+
+            other_paths -= {path}
+            if not other_paths:
+                # if there are no other paths, this must have stayed in the
+                # topic.
+                assert moved
+                # todo(dmnd) move repos here?
+                return []
+
+            current_paths = {p for p in index_current.get(path.id(), [])
+                         if p != path}
+
+            moves = other_paths - current_paths
+            copies = current_paths & other_paths
+
+            return ([str_colour(p.dirname(), move_colour)
+                    for p in moves] +
+                    [str_colour(p.dirname())
+                    for p in copies])
+
+        def get_source(path, index_old, index_new):
+            return _get_source(path, index_new, index_old,
+                str_colour("NEW", colours['green']),
+                colours['red'])
+
+        def get_dest(path, index_old, index_new):
+            return _get_source(path, index_old, index_new,
+                str_colour("DELETED", colours['red']),
+                colours['green'])
+
         if old is None:
             self_added = True
+            tags.update(get_source(new, self.index_old, self.index_new))
         elif new is None:
             self_removed = True
+            tags.update(get_dest(old, self.index_old, self.index_new))
         elif new and old:
             assert old.id() == new.id(), "ids don't match: %r, %r" % (
                 new.id(), old.id())
@@ -103,7 +154,6 @@ class DiffContext(object):
             return any(c[0] == 'Separator' for c in children)
         curated = has_separator(cnew_set) and not has_separator(cold_set)
 
-        tags = set()
         colour = None
         if moved:
             if self_added:
@@ -118,7 +168,7 @@ class DiffContext(object):
         elif curated:
             tags.add(str_colour('newly curated', colours['blue']))
 
-        id = old.id() if old else new.id()
+
         if cold_set or cnew_set:
             children_count = "(%(oc)i -> %(nc)i) " % {
                 'oc': len(cold_set),
@@ -132,9 +182,9 @@ class DiffContext(object):
 
         pindent("%(dchildren)s %(id)s %(children_count)s %(tags)s" % {
             'dchildren': sdchildren,
-            'id': Path.str_key(id),
+            'id': str_colour(Path.str_key(id), colour),
             'children_count': children_count,
-            'tags': ", ".join(tags)}, indent, colour, buffer=topic_buffer)
+            'tags': ", ".join(tags)}, indent, buffer=topic_buffer)
 
         def make_path(parent_path, id):
             path = parent_path.copy()
@@ -261,13 +311,6 @@ class DiffContext(object):
             print
 
 
-def str_colour(s, colour=None):
-    if colour and not args.no_colour:
-        return '\033[%im%s\033[0m' % (colour, s)
-    else:
-        return s
-
-
 def pindent(s="", n=0, colour=None, indent=True, buffer=None):
     if buffer is None:
         buffer = sys.stdout
@@ -307,11 +350,11 @@ class Path(CommonEqualityMixin):
     def __init__(self, parts):
         self.parts = parts
 
-    def __repr__(self):
-        # don't show root
-        path = [Path.str_key(p) for p in self.parts[:-1]]
-        if path:
-            path[0] = ""
+    def __repr___(self):
+        return str(self)
+
+    def __str__(self):
+        path = self._dirname()
         path.append(Path.str_key(self.id()))
         return "/".join(path)
 
@@ -347,6 +390,18 @@ class Path(CommonEqualityMixin):
 
     def root(self):
         return self.parts[0]
+
+    def _dirname(self):
+        # don't show root
+        path = [Path.str_key(p) for p in self.parts[:-1]]
+        if path:
+            path[0] = ""
+        return path
+
+    def dirname(self):
+        """Returns the 'dirname' which is the full path minus the 'filename'
+        part (the last segment)."""
+        return "/".join(self._dirname())
 
 
 def index_topic(topic, path=None, index=None):
