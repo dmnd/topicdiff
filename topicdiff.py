@@ -116,8 +116,7 @@ class DiffContext(object):
         elif self_removed:
             colour = colours['red']
         elif curated:
-            colour = colours['blue']
-            tags.add('newly curated')
+            tags.add(str_colour('newly curated', colours['blue']))
 
         id = old.id() if old else new.id()
         if cold_set or cnew_set:
@@ -262,6 +261,13 @@ class DiffContext(object):
             print
 
 
+def str_colour(s, colour=None):
+    if colour and not args.no_colour:
+        return '\033[%im%s\033[0m' % (colour, s)
+    else:
+        return s
+
+
 def pindent(s="", n=0, colour=None, indent=True, buffer=None):
     if buffer is None:
         buffer = sys.stdout
@@ -270,10 +276,7 @@ def pindent(s="", n=0, colour=None, indent=True, buffer=None):
     if indent and not args.no_indent:
         buffer.write((n * ' ') + '.')
     if s:
-        if colour and not args.no_colour:
-            buffer.write('\033[%im%s\033[0m\n' % (colour, s))
-        else:
-            buffer.write("%s\n" % s)
+        buffer.write(str_colour(s, colour) + "\n")
 
 
 def get_id(entity):
