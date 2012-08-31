@@ -1,4 +1,7 @@
 
+import sys
+import json
+
 minimal_fields = {
     "Topic": [
         "kind",
@@ -31,39 +34,61 @@ minimal_fields = {
     ],
 }
 
-# topic_new_fields = (
-#     'title',
-#     'standalone_title',
-#     'description',
-#     'tags')
+new_fields = {
+    'Topic': [
+        'title',
+        'standalone_title',
+        'description',
+        'tags'
+    ],
+    'Video': [
+        "date_added",
+        "description",
+        "duration",
+        "extra_properties",
+        "has_questions",
+        "keywords",
+        "title",
+        "views",
+        "youtube_id"
+    ],
+    'Exercise': [
+        "author_name",
+        "covers",
+        "creation_date",
+        "description",
+        "display_name",
+        "file_name",
+        "h_position",
+        "kind",
+        "live",
+        "name",
+        "prerequisites",
+        "pretty_display_name",
+        "related_video_readable_ids",
+        "seconds_per_fast_problem",
+        "sha1",
+        "short_display_name",
+        "summative",
+        "tags",
+        "v_position"
+    ]
+}
 
-# video_new_fields = (
-#     "youtube_id",
-#     "title",
-#     "url",
-#     "description",
-#     "keywords",
-#     "duration",
-#     "readable_id",
-#     "views")
-# exercise_new_fields = (
-#     "related_video_keys")
 
-
-def strip_extraneous_fields(node):
+def strip_extraneous_fields(node, use_new_fields=False):
     """modifies the dict in place"""
     kind = node["kind"]
     if kind in minimal_fields:
         allowed = minimal_fields[kind]
+        if use_new_fields:
+            allowed += new_fields.get(kind, [])
         for key in node.keys():
             if key not in allowed:
                 del node[key]
 
     for child in node.get("children", []):
         strip_extraneous_fields(child)
-
-import sys
-import json
 
 
 def main():
